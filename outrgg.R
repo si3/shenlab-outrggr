@@ -86,7 +86,9 @@ ReadData <- function(read.counts, gc, sample.names=NULL, target=NULL, nobuild=F)
   return(counts)
 }
 
+
 ## PART 1 FUNCTIONS ##
+# Essential columns include CHR, START, END, INTERVAL, SAMPLE, CNV
 
 # Function to reformat to BED, accepts CNV list or object (list is slower)
 ReformatCNVs <- function(xcnv, format) {
@@ -135,6 +137,10 @@ SplitCNVs <- function(xcnv.list, format) {
     cnvs.per.sample.list[[i]] <- split(xcnv.list[[i]], xcnv.list[[i]]$SAMPLE)
   }
   names(cnvs.per.sample.list) <- names(xcnv.list)
+  # remove samples that have 0 CNVs
+  for (i in seq(1, length(cnvs.per.sample.list))) {
+    cnvs.per.sample.list[[i]] <- cnvs.per.sample.list[[i]][sapply(cnvs.per.sample.list[[i]], nrow) > 0]
+  }
   return(cnvs.per.sample.list)
 }
 
