@@ -86,9 +86,9 @@ ReadData <- function(read.counts, gc, sample.names=NULL, target=NULL, nobuild=F)
   return(counts)
 }
 
-
 ## PART 1 FUNCTIONS ##
 # Essential columns include CHR, START, END, INTERVAL, SAMPLE, CNV
+# Make sure CHR is character and START, END are numeric
 
 # Function to reformat to BED, accepts CNV list or object (list is slower)
 ReformatCNVs <- function(xcnv, format) {
@@ -132,6 +132,7 @@ ReformatCNVs <- function(xcnv, format) {
 # Function to split reformatted xcnv list into sublists of samples
 SplitCNVs <- function(xcnv.list, format) {
   if (class(xcnv.list) != "list") {stop("Needs a list of at least 2 different CNV sets")}
+  # add function to check for basic colnames
   cnvs.per.sample.list <- vector("list", length(xcnv.list))
   for (i in seq(1, length(xcnv.list))) {
     cnvs.per.sample.list[[i]] <- split(xcnv.list[[i]], xcnv.list[[i]]$SAMPLE)
@@ -148,8 +149,9 @@ SplitCNVs <- function(xcnv.list, format) {
 CountOverlaps <- function(overlap.df, n=c("2", "3")) {return(sum(overlap.df$n.overlaps == n))}
 GetOverlaps <- function(overlap.df, n=c("2", "3")) {return(filter(overlap.df, overlap.df$n.overlap == n))}
 
-# Function to find overlapping segments from sample sublists, strict flag will output only overlaps (no overhangs)
-# 
+# Function to find overlapping segments from sample sublists, strict flag will output only overlaps (no overhangs) as df
+# otherwise will return list of overlaps + overhangs by sample
+# make sure input is sorted
 Find2Overlaps <- function(xcnv.list, strict = F) {
   if (length(xcnv.list) != 2) {stop("Needs a named list of 2 different CNV sets, split by sample")}
   if (is.null(names(xcnv.list[[1]])) | is.null(names(xcnv.list[[2]]))) {stop("Is the list split by sample? Then specify sample names")}
@@ -181,16 +183,17 @@ Find3Overlaps <- function(xcnv.list, strict = F) {
     test.out <- lapply(test, function(x) GetOverlaps(as.data.frame(x), 3))
     return(test.out)
   }
-  return(test) # returns list of overlaps + overhands organized by sample
+  return(test) # returns list of overlaps + overhangs organized by sample
 }
 
 # Function to assign DUP/DEL and Q_SOME score to overlapping segments, accepts list of dataframes
-# outputs data in user-ready format
+# Only tested using strict flag, make sure sample names have no "." in them
+# returns data in user-ready table format
 Extract2Overlaps <- function(overlaps, xcnv.list) {
   if (!is.list(xcnv.list)) {
     stop("List of CNVs not split by sample needed as input")
   }
-  if (is.list(xcnv.list[[1]]) | is.list(xcnv.list[[2]])) {
+  if (!is.data.frame(xcnv.list[[1]]) | !is.data.frame(xcnv.list[[2]])) {
     stop("List of CNVs in data frame format needed as input")
   }
   if (length(xcnv.list) != 2) {
@@ -201,16 +204,16 @@ Extract2Overlaps <- function(overlaps, xcnv.list) {
   samples <- vapply(strsplit(samples, ".", fixed=T), '[', 1, FUN.VALUE = character(1))
   test <- cbind(test[,1:3], samples)
   colnames(test) <- c("CHR", "START", "END", "SAMPLE")
-  overlaps.sorted <- bedr.sort.region(overlaps, check.chr=F)
+  overlaps.sorted <- bedr.sort.region(test, check.chr=F)
   xcnv1 <- bedr.sort.region(xcnv.list[[1]], check.chr=F)
   xcnv2 <- bedr.sort.region(xcnv.list[[2]], check.chr=F)
   joined1 <- bedr.join.region(overlaps.sorted, xcnv1, check.chr=F)
   joined2 <- bedr.join.region(overlaps.sorted, xcnv2, check.chr=F)
   # Only consider CNVs called in the same sample
-  joined1 <- joined1[join1[,4]==join1[,9],]
-  joined2 <- joined2[join2[,4]==join2[,9],]
+  joined1 <- joined1[joined1[,4]==joined1[,9],]
+  joined2 <- joined2[joined2[,4]==joined2[,9],]
   test.out <- cbind(overlaps.sorted, joined1[,c(10,12)], joined2[,c(10,12)])
-  #colnames(test) <- c("CHR", "START", "END", "SAMPLE", "CNV_A", "Q_SOME_A", "CNV_B", "Q_SOME_B")
+  colnames(test.out) <- c("CHR", "START", "END", "SAMPLE", "CNV_A", "Q_SOME_A", "CNV_B", "Q_SOME_B")
   return(test.out)
 }
 
@@ -218,7 +221,7 @@ Extract3Overlaps <- function(overlaps, xcnv.list) {
   if (!is.list(xcnv.list)) {
     stop("List of CNVs not split by sample needed as input")
   }
-  if (is.list(xcnv.list[[1]]) | is.list(xcnv.list[[2]]) | is.list(cnv.list[[3]])) {
+  if (!is.data.frame(xcnv.list[[1]]) | !is.data.frame(xcnv.list[[2]]) | !is.data.frame(cnv.list[[3]])) {
     stop("List of CNVs in data frame format needed as input")
   }
   if (length(xcnv.list) != 3) {
@@ -229,35 +232,58 @@ Extract3Overlaps <- function(overlaps, xcnv.list) {
   samples <- vapply(strsplit(samples, ".", fixed=T), '[', 1, FUN.VALUE = character(1))
   test <- cbind(test[,1:3], samples)
   colnames(test) <- c("CHR", "START", "END", "SAMPLE")
-  overlaps.sorted <- bedr.sort.region(overlaps, check.chr=F)
+  overlaps.sorted <- bedr.sort.region(test, check.chr=F)
   xcnv1 <- bedr.sort.region(xcnv.list[[1]], check.chr=F)
   xcnv2 <- bedr.sort.region(xcnv.list[[2]], check.chr=F)
   xcnv3 <- bedr.sort.region(xcnv.list[[3]], check.chr=F)
   joined1 <- bedr.join.region(overlaps.sorted, xcnv1, check.chr=F)
   joined2 <- bedr.join.region(overlaps.sorted, xcnv2, check.chr=F)
-  joined3 <- bedr.join.region(overlaps.sorted, xcnv3, chec.chr=F)
+  joined3 <- bedr.join.region(overlaps.sorted, xcnv3, check.chr=F)
   # Only consider CNVs called in the same sample
-  joined1 <- joined1[join1[,4]==join1[,9],]
-  joined2 <- joined2[join2[,4]==join2[,9],]
-  joined3 <- joined3[join3[,4]==join3[,9],]
+  joined1 <- joined1[joined1[,4]==joined1[,9],]
+  joined2 <- joined2[joined2[,4]==joined2[,9],]
+  joined3 <- joined3[joined3[,4]==joined3[,9],]
   test.out <- cbind(overlaps.sorted, joined1[,c(10,12)], joined2[,c(10,12)], joined3[,c(10,12)])
-  #colnames(test) <- c("CHR", "START", "END", "SAMPLE", "CNV_A", "Q_SOME_A", "CNV_B", "Q_SOME_B")
+  colnames(test.out) <- c("CHR", "START", "END", "SAMPLE", "CNV_A", "Q_SOME_A", "CNV_B", "Q_SOME_B", "CNV_C", "Q_SOME_C")
   return(test.out)
 }
 
-# Accessory function to consolidate calls across samples
+# Function to remove discordant calls, needs list of dataframes, output from Extract2Overlaps
+# will return a list of dataframes without discordant calls
+RemoveDisc2 <- function(extract.df, xcnv.list) {
+  if (length(xcnv.list) != 2) {stop("List of length 2 needed as input")}
+  to.remove <- extract.df[extract.df$CNV_A != extract.df$CNV_B,]
+  a <- bedr.sort.region(xcnv.list[[1]], check.chr=F)
+  b <- bedr.sort.region(xcnv.list[[2]], check.chr=F)
+  test.out <- list(a[-which(in.region(a, to.remove, check.chr=F)),], b[-which(in.region(b, to.remove, check.chr=F)),])
+  names(test.out) <- names(xcnv.list)
+  return(test.out)
+}
+
+RemoveDisc3 <- function(extract.df, xcnv.list) {
+  if (length(xcnv.list) != 3) {stop("List of length 3 needed as input")}
+  to.remove <- extract.df[extract.df$CNV_A != extract.df$CNV_B | extract.df$CNV_A != extract.df$CNV_C | extract.df$CNV_B != extract.df$CNV_C,]
+  a <- bedr.sort.region(xcnv.list[[1]], check.chr=F)
+  b <- bedr.sort.region(xcnv.list[[2]], check.chr=F)
+  c <- bedr.sort.region(xcnv.list[[3]], check.chr=F)
+  test.out <- list(a[-which(in.region(a, to.remove, check.chr=F)),], b[-which(in.region(b, to.remove, check.chr=F)),], c[-which(in.region(c, to.remove, check.chr=F)),])
+  names(test.out) <- names(xcnv.list)
+  return(test.out)
+}
+
+# Accessory function to consolidate calls across samples, fetching overhangs
 GetClusters <- function(x) {
   test <- cluster.region(x, check.chr=F)
   keep <- names(which(table(test$regionIndex) > 1))
-  test.out <- filter(test, regionIndex %in% keep)
+  test.out <- filter(test, regionIndex %in% keep | test$V4 > 1)
   return(test.out)
 }
 
-# Function to process output of Find2Overlaps, merge flag will merge intervals across samples, strict will only consider overlaps
-CombineSamples <- function(xcnv.by.sample, merge = F, strict = T) {
+# Function to process output of Find2Overlaps, merge flag will merge intervals across samples, 
+# removed strict flag, if by.cluster = F it will consider all intervals
+CombineSamples <- function(xcnv.by.sample, merge = F, by.cluster = T) {
   if (!is.list(xcnv.by.sample)) {stop("List of CNVs split by sample needed")}
-  if ( strict ) {
-    # Filters out all CNVs that were called in only one sample
+  if (by.cluster) {
     xcnv.by.sample <- lapply(xcnv.by.sample, GetClusters)
   }
   test <- do.call(rbind, xcnv.by.sample) # faster than ldply, make.row.names=F unused?
@@ -273,17 +299,10 @@ CombineSamples <- function(xcnv.by.sample, merge = F, strict = T) {
   return(test.out)
 }
 
-# Wrapper function to identify partitions, nooutput flag doesn't write overlaps to disk if T
-# GetSegments <- function(xcnv.list, nooutput=F) {
-  
-  
-  write.table(test.sort, "putative_regions.bed", sep = "\t", quote=F, row.names=F, col.names=F) # write file for coverage calculation
-  return(test.out)
-}
 
 # Functions to call read depth in putative segments
-GetReadDepth # bedtools multicov -bams path/to/bam -bed path/to/bed -q MinMQ
-GetGC # bedtools nuc -fi path/to/fasta -bed path/to/bed (column number 2 after bed entry is %GC)
+# GetReadDepth # bedtools multicov -bams path/to/bam -bed path/to/bed -q MinMQ
+# GetGC # bedtools nuc -fi path/to/fasta -bed path/to/bed (column number 2 after bed entry is %GC)
 
 ## PART 2 FUNCTIONS ##
 
@@ -531,8 +550,8 @@ FindConsensus <- function(sample.name, counts, cov, numrefs=30, maxrows=36000 , 
     d <- sample(nrow(A), min(500, nrow(A)))
     est[i, ] <- nnls(A[d, ], b[d])$x
   }
-  weights <- colMeans(est)
-  sample.weights <- weights / sum(weights)
+  est.weights <- colMeans(est)
+  sample.weights <- est.weights / sum(est.weights)
   library(Hmisc)
   # Estimate weighted mean
   counts$mean <- apply(counts[, reference.samples], 
@@ -549,14 +568,20 @@ FindConsensus <- function(sample.name, counts, cov, numrefs=30, maxrows=36000 , 
   library(mgcv)
   counts.subset$var[counts.subset$var==0] <- 0.1 
   # Remove outliers if remove.out is T by fitting a glm approximation and calculating Cook's D
+  #if (remove.out) {
+  #  fit.test <- glm(var ~ mean + gc, family="Gamma", data=counts.subset)
+  #  dist <- cooks.distance(fit.test)
+  #  remove <- which(dist > 4/maxrows)
+  #  counts.subset <- counts.subset[-remove,]
+  #}
+  # fitting a GAM to estimate parameters, remove outliers if remove.out is T
+  fit <- gam(var ~ s(mean) + s(gc), family=Gamma(link=log), data=counts.subset)
   if (remove.out) {
-    fit.test <- glm(var ~ mean + gc, family=Gamma(link=log), data=counts.subset, na.exclude)
-    dist <- cooks.distance(fit.test)
+    dist <- cooks.distance(fit)
     remove <- which(dist > 4/maxrows)
     counts.subset <- counts.subset[-remove,]
+    fit <- gam(var ~ s(mean) + s(gc), family=Gamma(link=log), data=counts.subset)
   }
-  # fitting a GAM to estimate parameters
-  fit <- gam(var ~ s(mean) + s(gc), family=Gamma(link=log), data=counts.subset)
   # choose between predicted value, weighted variance, or Poisson
   v.estimate <- pmax(predict(fit, counts, type="response"), counts$var, 
                      counts$mean * 1.01)
@@ -615,3 +640,9 @@ FindConsensus <- function(sample.name, counts, cov, numrefs=30, maxrows=36000 , 
   #return(state.probs)
 }
 
+Phred <- function(LR) {
+  score <- round(min(99, -10 * log10(exp(LR))))
+  return(score)
+}
+
+#sapply(test$LR1, Phred)
