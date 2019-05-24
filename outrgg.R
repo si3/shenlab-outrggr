@@ -1,50 +1,25 @@
-#!/usr/bin/env Rscript
-#args = commandArgs(trailingOnly = TRUE) # this will store any arguments to Rscript as entries in string vector args
-
-## outrgg.R script ##
-## February 2019 - Columbia University
-## Stefano Iantorno (si3 @ github)
-## Call using Rscript outrgg.R xcnv1 xcnv2 xcnv3
+## OUTRGGR v.1.0 ## Base functions ##
+## May 2019 - Columbia University ##
+## Stefano Iantorno (si3 @ github) ## 
+## soap@berkeley.edu ##
 
 ## Load plyr before dplyr to avoid conflicts
+
 library(plyr)
 library(dplyr)
 
-## Make sure that bedtools and bedops are installed
-## Check that bedops is set to your number of cores for parallel processing
-## Load path to their directories into R session environment
-## If not already in your system path
+## Make sure that bedtools, bedops, and tabix are installed 
+## If not already in your system path, load their path into R session environment
 
-#old_path <- Sys.getenv("PATH")
-#Sys.setenv(PATH=paste(old_path, "./.../bin", sep = ":"))
 library(bedr)
 
-## Set path to other files
-#bamfile_path="./.../bamfile"
+# Optional function to import CNV calls
 
-## Or read in from args
-
-#if (length(args)==0) {
-#  stop("At least two arguments must be supplied.n", call. = FALSE)
-#} else if (length(args)==1) {
-#  args[2] = "outrggR.batch"
-#}
-
-# this loops over all samples
-# for big datasets, convert to list of samples
-# then run parLapply in parallel package
-consensus.list <- vector("list", length(sample.names))
-for (SAMPLE in sample.names) {
-  i <- which(sample.names == SAMPLE)
-  consensus.list[[i]] <- FindConsensus(SAMPLE, counts, cov)
-}
-
-# Function to import CNV calls
 ReadCNVs <- function(xcnv, format=NULL){
   format<-as.factor(format)
-  if (is.null(xcnv)) {stop("Read in CNVs with read.table(), with or without header")}
+  if (is.null(xcnv)) {stop("Read CNVs with read.table(), with or without header")}
   if (is.null(format)) {stop("No format given")}
-  if (!format %in% c("CANOES", "CLAMMS", "XHMM")) {stop("Please select format between CANOES, CLAMMS, XHMM")}
+  if (!format %in% c("CANOES", "CLAMMS", "XHMM", "OTHER")) {stop("Please select format between CANOES, CLAMMS, XHMM")}
   # add a function to read.table here
   if (format == "CANOES") {
     col.test <- ifelse(ncol(xcnv)==10, "Correct number of columns for CANOES format", "Incorrect number of columns for CANOES format")
@@ -55,7 +30,7 @@ ReadCNVs <- function(xcnv, format=NULL){
   if (format == "CLAMMS") {
     col.test <- ifelse(ncol(xcnv)==18, "Correct number of columns for CLAMMS format", "Incorrect number of columns for CLAMMS format")
     print(col.test)
-    colnames(xcnv) <- c("CHR", "START", "END", "INTERVAL", "SAMPLE", "CNV", "MLCN", "NUM_TARG", "Q_SOME", 
+    colnames(xcnv) <- c("CHR", "START", "STOP", "INTERVAL", "SAMPLE", "CNV", "MLCN", "NUM_TARG", "Q_SOME", 
                         "Q_EXACT", "Q_LEFT_EXTEND", "LEFT_EXTEND_COORD", "Q_RIGHT_EXTEND", "RIGHT_EXTEND_COORD",
                         "Q_LEFT_CONTRACT", "LEFT_CONTRACT_COORD", "Q_RIGHT_CONTRACT", "RIGHT_CONTRACT_COORD")
   }
@@ -64,33 +39,23 @@ ReadCNVs <- function(xcnv, format=NULL){
     print(col.test)
     colnames(xcnv) <- c("SAMPLE", "CNV", "INTERVAL", "KB", "CHR", "MID_BP", "TARGETS", "NUM_TARG", "Q_EXACT", "Q_SOME", "Q_NON_DIPLOID", "Q_START", "Q_STOP", "MEAN_RD", "MEAN_ORIG_RD")
   }
+  if (format == "OTHER") {
+    col.test <- ifelse(ncol(xcnv)>=6, "Correct minimum number of columns for OTHER format", "Not enough columns for OTHER format")
+    print(col.test)
+    colnames(xcnv)[1:4] <- c("CHR", "START", "END", "INTERVAL", "SAMPLE", "CNV")
+  }
   return(xcnv)
 }
 
-# Function to import count and GC data, nobuild flag doesn't check for formatting if T
-ReadData <- function(read.counts, gc, sample.names=NULL, target=NULL, nobuild=F) {
-  if (is.null(read.counts)) {stop("Read in count data with read.table(), with or without header")}
-  if (is.null(gc)) {stop("Read in GC data as a numeric vector")}
-  if (is.null(sample.names)){
-    sample.names <- paste("S", seq(4:ncol(read.counts)), sep="")
-  }
-  if (is.null(target)){
-    target <- seq(1, nrow(read.counts))
-  }
-  if (nobuild){
-    return(counts=read.counts)
-  }
-  names(read.counts) <- c("chromosome", "start", "end", sample.names)
-  counts <- cbind(target, gc, read.counts)
-  if (ncol(counts) > ncol(read.counts) + 2) {stop("Incorrect number of columns")}
-  return(counts)
-}
+## PART 1: SEGMENTATION FUNCTIONS ##
 
-## PART 1 FUNCTIONS ##
-# Essential columns include CHR, START, END, INTERVAL, SAMPLE, CNV
+# Essential columns for CNV files include CHR, START, END, INTERVAL, SAMPLE, CNV
 # Make sure CHR is character and START, END are numeric
 
 # Function to reformat to BED, accepts CNV list or object (list is slower)
+# Only works for formats used by CANOES, XHMM, CLAMMS to report CNV calls
+# Will output essential columns plus NUM_TARG and Q_SOME
+
 ReformatCNVs <- function(xcnv, format) {
   format <- as.factor(format)
   if (is.null(format)) {stop("Select format between CANOES, CLAMMS, XHMM")}
@@ -130,9 +95,10 @@ ReformatCNVs <- function(xcnv, format) {
 }
 
 # Function to split reformatted xcnv list into sublists of samples
+
 SplitCNVs <- function(xcnv.list, format) {
   if (class(xcnv.list) != "list") {stop("Needs a list of at least 2 different CNV sets")}
-  # add function to check for basic colnames
+  # consider adding function to check for basic colnames
   cnvs.per.sample.list <- vector("list", length(xcnv.list))
   for (i in seq(1, length(xcnv.list))) {
     cnvs.per.sample.list[[i]] <- split(xcnv.list[[i]], xcnv.list[[i]]$SAMPLE)
@@ -146,18 +112,20 @@ SplitCNVs <- function(xcnv.list, format) {
 }
 
 # Accessory functions to get info about overlapping CNV segments
+
 CountOverlaps <- function(overlap.df, n=c("2", "3")) {return(sum(overlap.df$n.overlaps == n))}
+
 GetOverlaps <- function(overlap.df, n=c("2", "3")) {return(filter(overlap.df, overlap.df$n.overlap == n))}
 
 # Function to find overlapping segments from sample sublists, strict flag will output only overlaps (no overhangs) as df
-# otherwise will return list of overlaps + overhangs by sample
-# make sure input is sorted
+# otherwise will return list of segments + overlap info organized by sample
+# requires sorted input
+
 Find2Overlaps <- function(xcnv.list, strict = F) {
   if (length(xcnv.list) != 2) {stop("Needs a named list of 2 different CNV sets, split by sample")}
   if (is.null(names(xcnv.list[[1]])) | is.null(names(xcnv.list[[2]]))) {stop("Is the list split by sample? Then specify sample names")}
   x <- which(names(xcnv.list[[1]]) %in% names(xcnv.list[[2]]))
   y <- which(names(xcnv.list[[2]]) %in% names(xcnv.list[[1]]))
-  #if (all(names(xcnv.list[[1]][x]) != names(xcnv.list[[2]][y]))) {stop("Sample names do not match")}
   if (length(x) != length(y)) {stop("Sample names do not match")}
   test <- vector("list", length(x))
   test <- mapply(function(a,b) {bedr.join.multiple.region(list(a, b), check.chr=FALSE)}, a=xcnv.list[[1]][x], b=xcnv.list[[2]][y], SIMPLIFY=F)
@@ -166,7 +134,7 @@ Find2Overlaps <- function(xcnv.list, strict = F) {
     test.out <- lapply(test, function(x) GetOverlaps(as.data.frame(x), 2))
     return(test.out)
   }
-  return(test) # returns a list of overlapping segments + overhangs organized by sample
+  return(test) # returns a list of all segments along with overlap information, organized by sample
 }
 
 Find3Overlaps <- function(xcnv.list, strict = F) {
@@ -183,12 +151,23 @@ Find3Overlaps <- function(xcnv.list, strict = F) {
     test.out <- lapply(test, function(x) GetOverlaps(as.data.frame(x), 3))
     return(test.out)
   }
-  return(test) # returns list of overlaps + overhangs organized by sample
+  return(test) # returns list of segments + overlap info organized by sample
 }
 
-# Function to assign DUP/DEL and Q_SOME score to overlapping segments, accepts list of dataframes
-# Only tested using strict flag, make sure sample names have no "." in them
+# Functions to assign DUP/DEL and Q_SOME score to overlapping segments, accepts list of dataframes
+# Requires output of Find2Overlaps obtained using strict flag, make sure sample names have no "." in them
 # returns data in user-ready table format
+
+ExtractOverlaps <- function(overlaps) {
+  test <- do.call(rbind, overlaps)
+  samples <- rownames(test)
+  samples <- vapply(strsplit(samples, ".", fixed=T), '[', 1, FUN.VALUE = character(1))
+  test <- cbind(test[,1:3], samples)
+  colnames(test) <- c("CHR", "START", "END", "SAMPLE")
+  overlaps.sorted <- bedr.sort.region(test, check.chr=F)
+  return(overlaps.sorted)
+}
+
 Extract2Overlaps <- function(overlaps, xcnv.list) {
   if (!is.list(xcnv.list)) {
     stop("List of CNVs not split by sample needed as input")
@@ -250,6 +229,7 @@ Extract3Overlaps <- function(overlaps, xcnv.list) {
 
 # Function to remove discordant calls, needs list of dataframes, output from Extract2Overlaps
 # will return a list of dataframes without discordant calls
+
 RemoveDisc2 <- function(extract.df, xcnv.list) {
   if (length(xcnv.list) != 2) {stop("List of length 2 needed as input")}
   to.remove <- extract.df[extract.df$CNV_A != extract.df$CNV_B,]
@@ -272,6 +252,7 @@ RemoveDisc3 <- function(extract.df, xcnv.list) {
 }
 
 # Accessory function to consolidate calls across samples, fetching overhangs
+
 GetClusters <- function(x) {
   test <- cluster.region(x, check.chr=F)
   keep <- names(which(table(test$regionIndex) > 1))
@@ -280,10 +261,11 @@ GetClusters <- function(x) {
 }
 
 # Function to process output of Find2Overlaps, merge flag will merge intervals across samples, 
-# removed strict flag, if by.cluster = F it will consider all intervals
-CombineSamples <- function(xcnv.by.sample, merge = F, by.cluster = T) {
+# if intersect = F it will consider all intervals
+
+CombineSamples <- function(xcnv.by.sample, merge = F, intersect = F) {
   if (!is.list(xcnv.by.sample)) {stop("List of CNVs split by sample needed")}
-  if (by.cluster) {
+  if (intersect) {
     xcnv.by.sample <- lapply(xcnv.by.sample, GetClusters)
   }
   test <- do.call(rbind, xcnv.by.sample) # faster than ldply, make.row.names=F unused?
@@ -300,11 +282,28 @@ CombineSamples <- function(xcnv.by.sample, merge = F, by.cluster = T) {
 }
 
 
-# Functions to call read depth in putative segments
-# GetReadDepth # bedtools multicov -bams path/to/bam -bed path/to/bed -q MinMQ
-# GetGC # bedtools nuc -fi path/to/fasta -bed path/to/bed (column number 2 after bed entry is %GC)
+## PART 2: MODELLING FUNCTIONS ##
 
-## PART 2 FUNCTIONS ##
+# Function to import read count and GC data, nobuild flag doesn't check for formatting if T
+# read counts need to be in CANOES format
+
+ReadData <- function(read.counts, gc, sample.names=NULL, target=NULL, nobuild=F) {
+  if (is.null(read.counts)) {stop("Read in count data with read.table(), with or without header")}
+  if (is.null(gc)) {stop("Read in GC data as a numeric vector")}
+  if (is.null(sample.names)){
+    sample.names <- paste("S", seq(4:ncol(read.counts)), sep="")
+  }
+  if (is.null(target)){
+    target <- seq(1, nrow(read.counts))
+  }
+  if (nobuild){
+    return(counts=read.counts)
+  }
+  names(read.counts) <- c("chromosome", "start", "end", sample.names)
+  counts <- cbind(target, gc, read.counts)
+  if (ncol(counts) > ncol(read.counts) + 2) {stop("Incorrect number of columns")}
+  return(counts)
+}
 
 # Calculates correlation matrix for all samples
 
@@ -344,7 +343,8 @@ ReplaceProbs <- function(x, states, probs) {
   return(x)
 }
 
-# Here below, y is lookup table with sumlogp's, x is the names in merged output
+# Accessory function called by RecalibrateClusters, y is lookup table with sumlogp's, x is the names in merged output
+
 CheckNames <- function(x, y) {
   targets <- unlist(strsplit(x, ","))
   if (length(targets) > 1) {
@@ -371,12 +371,11 @@ CheckNames <- function(x, y) {
 }
 
 # Functions to generate likelihoods and output results for each cluster
-# ModelCopyState needs segs.by.clust combined with 
+
 ModelCopyState <- function(cluster.index, states, segs.by.clust) {
   # Check that maximum number of intervals is 10 at most
   subcluster <- unique(segs.by.clust[cluster.index, 5])
   probs <- segs.by.clust[cluster.index, 7:9]
-  #if (length(subcluster) > 10) stop("Cluster has more 10 segments, but should have no more than 10")
   # Check that you don't have a singleton
   if (length(cluster.index) == 1) {
     copy.state <- apply(segs.by.clust[cluster.index,7:9], 1, which.max)
@@ -387,13 +386,11 @@ ModelCopyState <- function(cluster.index, states, segs.by.clust) {
     copy.state <- names(c(DEL=1, DIP=2, DIP=3)[copy.state])
     results.table <- cbind(segs.by.clust[cluster.index,], copy.state, sumlogp1, sumlogp2, sumlogpnull)
     results.table <- select(results.table, target, copy.state, sumlogp1, sumlogp2, sumlogpnull)
-    #results.table$copy.state <- names(c(DEL=1, DIP=2, DIP=3)[copy.state])
-    # use select to make matching number of columns then rbind
     return(results.table)
   }
   state.truth <- by(segs.by.clust[cluster.index,], factor(segs.by.clust[cluster.index,5]), BuildTruthTable, states)
   results.list <- vector("list", length(state.truth))
-  # Next replace each state with its probability then extract useful variables
+  # Next replace each state with its probability, then extract useful variables
   for (i in 1:length(state.truth)) {
     if (ncol(state.truth[[i]]) > 10) stop("Cluster has >10 segments, but should have no more than 10")
     state.probs <- ReplaceProbs(state.truth[[i]], states, filter(segs.by.clust[cluster.index,], subclust==i)[,7:9])
@@ -414,56 +411,19 @@ ModelCopyState <- function(cluster.index, states, segs.by.clust) {
 }
 
 RecalibrateClusters <- function(counts, states=c("DEL","DIP","DUP"), segs.by.clust) {
-  # Move all of this below outside of loop
-  #segs <- data.frame(chr=as.character(counts[,3]), start=as.numeric(counts[,4]), end=as.numeric(counts[,5]))
-  #segs$chr <- as.character(segs$chr)
-  #segs$start <- as.numeric(segs$start)
-  #segs$end <- as.numeric(segs$end)
-  #segs.sort <- bedr.sort.region(segs, check.chr=F)
-  #segs.by.clust <- cluster.region(segs.sort, check.chr=F)
-  #colnames(segs.by.clust) <- c(colnames(segs), "clust")
-  #states <- c("DEL", "DIP", "DUP")
-  # Split clusters longer than 10 segments into chunks
-  #subcluster.all <- vector("numeric", nrow(segs.by.clust))
-  #for (i in unique(segs.by.clust[,4])) {
-  #  cluster.i <- which(segs.by.clust[,4] == i)
-  #  subcluster <- ceiling(seq_along(segs.by.clust[cluster.i, 4])/10) # can make this 5 for better speed
-  #  subcluster.all[cluster.i] <- subcluster
-  #}
-  #segs.by.clust <- cbind(segs.by.clust, subclust=subcluster.all, state.probs)
   results.list <- vector("list", length(unique(segs.by.clust[,"clust"])))
-  # move all of this above outside of loop
-  # Run a loop over all cluster
+  # Run a loop over all cluster to model copy states
   for (i in 1:length(unique(segs.by.clust[,"clust"]))) {
     cluster.i <- which(segs.by.clust[, "clust"] == i)
-    # Apply same code to all clusters,
-    #if (length(cluster.i) > 10) {
-    #  subcluster.i.list <- split(cluster.i, ceiling(seq_along(cluster.i)/10))
-    #  subcluster.states.list <- lapply(subcluster.i.list, ModelCopyState, states = c("DEL", "DIP", "DUP"), segs.by.clust)
-    #  # code below needs to wrapped into function and then run with lapply
-    #  cluster.states <- do.call(rbind, subcluster.states.list)
-    #  #subcluster.results <- lapply(subcluster.i.list, BuildResultsTable, cluster.states, segs.by.clust)
-    #  results.table <- do.call(rbind, subcluster.states.list)
-    #  results.table <- as.data.frame(results.table)
-    #  colnames(results.table) <- c("target", "CNV", "sumlogp1", "sumlogp2", "sumlogpnull")
-    #  results.table$target <- as.numeric(as.character(results.table$target))
-    #  results.table$CNV <- as.factor(results.table$CNV)
-    #  results.table$sumlogp1 <- as.numeric(as.character(results.table$sumlogp1))
-    #  results.table$sumlogp2 <- as.numeric(as.character(results.table$sumlogp2))
-    #  results.table$sumlogpnull <- as.numeric(as.character(results.table$sumlogpnull))
-    #  results.list[[i]] <- results.table
-      #print("Cluster split into subclusters")
-    #} else if (length(cluster.i) <= 10) { 
-      cluster.states <- ModelCopyState(cluster.i, states, segs.by.clust)
-      results.table <- as.data.frame(cluster.states)
-      colnames(results.table) <- c("target", "CNV", "sumlogp1", "sumlogp2", "sumlogpnull")
-      results.table$target <- as.numeric(as.character(results.table$target))
-      results.table$CNV <- as.factor(results.table$CNV)
-      results.table$sumlogp1 <- as.numeric(as.character(results.table$sumlogp1))
-      results.table$sumlogp2 <- as.numeric(as.character(results.table$sumlogp2))
-      results.table$sumlogpnull <- as.numeric(as.character(results.table$sumlogpnull))
-      results.list[[i]] <- results.table
-    #}
+    cluster.states <- ModelCopyState(cluster.i, states, segs.by.clust)
+    results.table <- as.data.frame(cluster.states)
+    colnames(results.table) <- c("target", "CNV", "sumlogp1", "sumlogp2", "sumlogpnull")
+    results.table$target <- as.numeric(as.character(results.table$target))
+    results.table$CNV <- as.factor(results.table$CNV)
+    results.table$sumlogp1 <- as.numeric(as.character(results.table$sumlogp1))
+    results.table$sumlogp2 <- as.numeric(as.character(results.table$sumlogp2))
+    results.table$sumlogpnull <- as.numeric(as.character(results.table$sumlogpnull))
+    results.list[[i]] <- results.table
   }
   results.table <- do.call(rbind, results.list)
   rownames(results.table) <- NULL
@@ -477,7 +437,7 @@ RecalibrateClusters <- function(counts, states=c("DEL","DIP","DUP"), segs.by.clu
   merge.output.df <- bedr.merge.region(output.sort.df, stratify.by="CNV", check.chr=F)
   merge.output.df$size <- merge.output.df$end - merge.output.df$start
   merge.output.df <- merge.output.df[merge.output.df$size > 50,] # filter out CNVs smaller than 50bp
-  # add code to keep CNV type as column from rownames
+  # add code to keep CNV type as column from rownames?
   types <- rownames(merge.output.df)
   types <- vapply(strsplit(types, ".", fixed=T), '[', 1, FUN.VALUE = character(1))
   merge.output.df <- data.frame(merge.output.df, type=types)
@@ -489,30 +449,15 @@ RecalibrateClusters <- function(counts, states=c("DEL","DIP","DUP"), segs.by.clu
   rownames(merge.out) <- NULL
   colnames(merge.out) <- c("names", "LR1", "LR2")
   merge.out$names <- as.character(merge.out$names)
-  #merge.out <- apply(merge.out, 2, as.character)
   test.out <- left_join(merge.output.df, merge.out)
   test.out$LR1 <- as.numeric(as.character(test.out$LR1))
   test.out$LR2 <- as.numeric(as.character(test.out$LR2))
   return(test.out)
-  #return(results.list)
 }
 
-# To add above
-# script to add SAMPLE column
-# script to 
-
-#output <- do.call(rbind, consensus.list)
-
-for (SAMPLE in sample.names) {
-  i <- which(sample.names == SAMPLE)
-  test.out[[i]] <- data.frame(consensus.list[[i]], sample=SAMPLE)
-}
-
-output <- do.call(rbind, consensus.list)
-lapply(consensus.list, function(x) {data.frame(x, sample=names(x))})
-
-# Wrapper function to generate consensus calls for all segments, remove.out flag will remove influential points with Cook's D
-# Incorporates functions to find clusters and feeds them into ModelCopyState
+# Wrapper function to generate consensus calls for all segments
+# remove.out flag will remove influential points with Cook's D
+# calls functions to find clusters and feeds them into ModelCopyState
 
 FindConsensus <- function(sample.name, counts, cov, numrefs=30, maxrows=36000 , remove.out=F) {
   if (!sample.name %in% names(counts)){stop("No column for sample ", sample.name, " in counts matrix")}
@@ -567,13 +512,6 @@ FindConsensus <- function(sample.name, counts, cov, numrefs=30, maxrows=36000 , 
   counts.subset <- counts[sample(nrow(counts), min(maxrows, nrow(counts))), ]
   library(mgcv)
   counts.subset$var[counts.subset$var==0] <- 0.1 
-  # Remove outliers if remove.out is T by fitting a glm approximation and calculating Cook's D
-  #if (remove.out) {
-  #  fit.test <- glm(var ~ mean + gc, family="Gamma", data=counts.subset)
-  #  dist <- cooks.distance(fit.test)
-  #  remove <- which(dist > 4/maxrows)
-  #  counts.subset <- counts.subset[-remove,]
-  #}
   # fitting a GAM to estimate parameters, remove outliers if remove.out is T
   fit <- gam(var ~ s(mean) + s(gc), family=Gamma(link=log), data=counts.subset)
   if (remove.out) {
@@ -631,18 +569,30 @@ FindConsensus <- function(sample.name, counts, cov, numrefs=30, maxrows=36000 , 
   subcluster.all <- vector("numeric", nrow(segs.by.clust))
   for (i in unique(segs.by.clust[,4])) {
     cluster.i <- which(segs.by.clust[,4] == i)
-    subcluster <- ceiling(seq_along(segs.by.clust[cluster.i, 4])/10) # can make this 5 for better speed
+    subcluster <- ceiling(seq_along(segs.by.clust[cluster.i, 4])/10) # could make this 5 for better speed
     subcluster.all[cluster.i] <- subcluster
   }
   segs.by.clust <- cbind(segs.by.clust, subclust=subcluster.all, state.probs)
   test.out <- RecalibrateClusters(counts, states, segs.by.clust)
+  test.out <- CalcNQ(test.out)
+  test.out$LR1 <- sapply(test.out$LR1, Phred)
+  test.out$LR2 <- sapply(test.out$LR2, Phred)
+  test.out$NQ <- sapply(test.out$NQ, Phred)
   return(test.out)
-  #return(state.probs)
 }
+
+# Adds log likelihood of null model to results
+
+CalcNQ <- function(test.out) {
+  non.dip <- log(1-exp(test.out$LR1))
+  test.out$NQ1 <- non.dip
+  return(test.out)
+}
+
+# Calculates Phred-scaled score
 
 Phred <- function(LR) {
   score <- round(min(99, -10 * log10(exp(LR))))
   return(score)
 }
 
-#sapply(test$LR1, Phred)
