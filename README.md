@@ -1,4 +1,4 @@
-# OUTRGGR: an integrated probabilistic framework for consensus calling of CNVs from whole-exome sequencing data #
+# OUTRGGR: an integrated probabilistic framework for consensus calling of CNVs from whole-exome sequencing data (WES) #
 
 OUTRGGR-CANOES (outlier-adjusted regression via GAM for genotyping in R of CNVs with an arbitrary number of exome samples), or simply OUTRGGR, is a platform to assess read depth support for CNV calls made by multiple CNV detection tools starting from WES data. It provides an integrated approach to consensus CNV calling, boundary resolution, and recalibration of genotype likelihood scores. 
 
